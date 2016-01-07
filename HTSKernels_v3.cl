@@ -186,7 +186,7 @@ uint REPLACE(TLLNode *pNodePool, /* Hash-table + stack of free nodes */
     // private variables
     uint uiLLMNode = 0 ;/* 2:0->[f,r,m] and 31:3->next-node-index */
     uint uiLLNode = 0 ; /* next-node-index */
-    uint pBits ; /* current-node-<f,r,m> bits, only 3 bits are using */;
+    uint pBits = 0; /* current-node-<f,r,m> bits, only 3 bits are using */;
     uint uiLLMNextNode = 0 ;/* 2:0->[f,r,m] and 31:3->next2next-node-index */
     uint uiLLNextNode = 0 ; /* next2next-node-index */
     uint nBits = 0 ; /* next-node-<f,r,m> bits, only 3 bits are using */;
@@ -207,12 +207,11 @@ uint REPLACE(TLLNode *pNodePool, /* Hash-table + stack of free nodes */
         nBits = GET_BITS(uiLLMNextNode) ; 
 
         if( (!IS_SET(nBits,2)) & (!IS_SET(nBits,0)) ) { // <f,r,m> = <0,x,0>
-
-            atomic_uint* pChgPtr =
-                (atomic_uint *)(&(pNodePool[uiLLNode].uiNext));
-            uiMtempNode = SET_PTR(uiLLNextNode) | 0x2 ;  /* set retain bit */
-            status = atomic_compare_exchange_strong(pChgPtr, &uiLLMNextNode, uiMtempNode) ;
-            if(status == false) return HTS_RETAIN_FAILED ; /* failed */
+	         atomic_uint* pChgPtr =
+					(atomic_uint *)(&(pNodePool[uiLLNode].uiNext));
+			 uiMtempNode = SET_PTR(uiLLNextNode) | 0x2 ;  /* set retain bit */
+				status = atomic_compare_exchange_strong(pChgPtr, &uiLLMNextNode, uiMtempNode) ;
+			 if(status == false) return HTS_RETAIN_FAILED ; // failed 
 
         } else return HTS_INVALID_NBITS ;
 
@@ -232,37 +231,22 @@ uint REPLACE(TLLNode *pNodePool, /* Hash-table + stack of free nodes */
         uiLLMNextNode = SET_PTR(newIndex) | pBits ;
         status = atomic_compare_exchange_strong(pChgPtr, &uiLLMNode, uiLLMNextNode) ;
         if(status == true) {
-            uiFree(pNodePool, HeadIndex, uiLLNode) ; 
+            uiFree(pNodePool, HeadIndex, uiLLNode) ;
+			atomic_uint* pChgPtr =
+                (atomic_uint *)(&(pNodePool[uiLLNode].uiNext));
+            uiMtempNode = SET_PTR(uiLLNextNode) | nBits ;  /* re-set retain bit */
+            status = atomic_compare_exchange_strong(pChgPtr, &uiLLMNextNode, uiMtempNode) ; 
             return HTS_REPLACE_SUCCESS ;
         }
-        else {
+        else { 
             atomic_uint* pChgPtr =
                 (atomic_uint *)(&(pNodePool[uiLLNode].uiNext));
-            uiMtempNode = SET_PTR(uiLLNextNode) | 0x2 ;  /* set retain bit */
+            uiMtempNode = SET_PTR(uiLLNextNode) | nBits ;  /* re-set retain bit */
             status = atomic_compare_exchange_strong(pChgPtr, &uiLLMNextNode, uiMtempNode) ;
             return HTS_REPLACE_FAILED ;
         }
     } 
-    /*else if( !uiLLNode ) { // boundary condition 
-		// who knows that new-node next pointer is 0 or not ??
-        uitempIndex = newIndex ;
-        uiMtempNode = pNodePool[uitempIndex].uiNext ;
-        uitempNode = GET_PTR(uiMtempNode) ;
-        while(uitempNode) {
-            uitempIndex = uitempNode ;
-            uiMtempNode = pNodePool[uitempIndex].uiNext ;
-            uitempNode = GET_PTR(uiMtempNode) ;
-        } ; // trace the path until end-node occurs
-        
-        pNodePool[uitempIndex].uiNext = SET_PTR(uiLLNode) ;
-        atomic_uint* pChgPtr =
-                (atomic_uint *)(&(pNodePool[uicurrentIndex].uiNext));
-        uiLLMNextNode = SET_PTR(newIndex) | pBits ;
-        status = atomic_compare_exchange_strong(pChgPtr, &uiLLMNode, uiLLMNextNode) ;
-        if(status == true) return HTS_REPLACE_SUCCESS ;
-        else return HTS_REPLACE_FAILED ;
-
-	} */else return HTS_INVALID_PBITS ;
+	else return HTS_INVALID_PBITS ;
 
 } // end-of-REPLACE
 
@@ -420,8 +404,8 @@ uint min_work_group_index(uint uiVal, uint maxIndex) {
             return uiprevNewPtr ;
           }
     } else { /* Key-exists-delete-it*/
-        pNodePool[uiNewPtr].pE[lid] = pNodePool[nextNodeIndex].pE[lid];
-        pNodePool[uiNewPtr].pE[(keyIndex-1)] = EMPTY_KEY ;
+		pNodePool[uiNewPtr].pE[lid] = pNodePool[nextNodeIndex].pE[lid];
+		pNodePool[uiNewPtr].pE[(keyIndex-1)] = EMPTY_KEY ; 
         return uiNewPtr ;
     }
     return NULL ;
@@ -462,11 +446,10 @@ int TRAVERSE( TLLNode *pNodePool,	/* Hash-table + stack of free nodes */
 } // end of TRAVERSE
 
 /*
-** uiHashFunction:
-** hash function to map key to hash table index.
-*/
-uint uiHashFunction(uint uiKey) 
-{
+ * uiHashFunction:
+ * hash function to map key to hash table index.
+ */
+uint uiHashFunction(uint uiKey) {
     return uiKey & OCL_HASH_TABLE_MASK ;
 }
 
@@ -480,7 +463,7 @@ uint uiHashFunction(uint uiKey)
  */
 uint bFind( TLLNode* pNodePool,		/* Hash-table + stack of free nodes */		
 		   uint     Key,			/* Key to be find */
-           int*	prevNodeIndex,  /* if key not found, return window */
+           int*	prevNodeIndex,		/* if key not found, return window */
            int*	nextNodeIndex,
            uint*    Index)			/* if key found, return its index */
 {
@@ -568,63 +551,70 @@ bool bAdd( TLLNode*  pNodePool,		/* Hash-table + stack of free nodes */
 	uint pBits = 0 ;
 	uint lid = get_local_id(0) ;
 
-	// check whether key exists or not, if not exists return window_found
-	// prevNodeIndex = nextNodEIndex in case of first element insertion
-    status = bFind( pNodePool, uiKey, &prevNodeIndex, &nextNodeIndex, &Index ) ;
+	while(true) {
+		// check whether key exists or not, if not exists return window_found
+		// prevNodeIndex = nextNodEIndex in case of first element insertion
+		status = bFind( pNodePool, uiKey, &prevNodeIndex, &nextNodeIndex, &Index ) ;
 
-    if(status == HTS_WINDOW_FOUND) { // if key_does-not-found 
+		if(status == HTS_WINDOW_FOUND) { // if key_does-not-found 
 		
-        if(lid == 0) {  // Go to next node 
-            uiLLNode = TRAVERSE(pNodePool, prevNodeIndex, nextNodeIndex) ;
-			//printf("uiLLNode%dprevNodeIndex%dnextNodeIndex%d", uiLLNode, prevNodeIndex, nextNodeIndex) ;
-        }
-		// wait for all work-items to reach this, point (especially WI0)
-        work_group_barrier(CLK_GLOBAL_MEM_FENCE|CLK_LOCAL_MEM_FENCE) ;
-		// Let other work-items in a work-group know next-node-index !!!
-        uiLLNode = work_group_broadcast(uiLLNode, 0) ;
-
-        if( uiLLNode != (int)NULL) { // if next-node exists ?? 
-			// clone the node by inserting key and return new node index
-		    cloneNodeIndex = CLONE(pNodePool, uiHeadIndex, nextNodeIndex, uiKey) ;
-			if(cloneNodeIndex == NULL) return false ; // Boundary conditions
-			// Delete node which was there before inserting key and free it
-            if(lid == 0) {
-                status = REPLACE(pNodePool, uiHeadIndex, uiLLNode, cloneNodeIndex) ;
-            }
-			// wait for all work-items to reach this, point (especially WI0)
-            work_group_barrier(CLK_GLOBAL_MEM_FENCE|CLK_LOCAL_MEM_FENCE) ;
-			// Let other work-items in a work-group know status value !!!
-            status = work_group_broadcast(status, 0) ;
-
-            if(status == HTS_REPLACE_SUCCESS) return true ; // SUCCESSFULLY INSERTED KEY 
-        }//end-of if(uiLLNode != (int)NULL)
-		else {
-			// clone the node by inserting key and return new node index
-		    cloneNodeIndex = CLONE(pNodePool, uiHeadIndex, nextNodeIndex, uiKey) ;
-			if(cloneNodeIndex == NULL) return false ; // Boundary conditions
-			uiLLMNode = pNodePool[nextNodeIndex].uiNext ;
-			uiLLNode = GET_PTR(uiLLMNode) ;
-			pBits = GET_BITS(uiLLMNode) ;
-			if(lid == 0) {
-				pNodePool[cloneNodeIndex].uiNext = pNodePool[nextNodeIndex].uiNext ;
-				atomic_uint* pChgPtr =
-                (atomic_uint *)(&(pNodePool[nextNodeIndex].uiNext));
-				uiMNextNode = SET_PTR(cloneNodeIndex) | pBits ;
-				status2 = atomic_compare_exchange_strong(pChgPtr, &uiLLMNode, uiMNextNode) ;
-				if(status2 == false) status = HTS_REPLACE_FAILED ;
-				else status = HTS_REPLACE_SUCCESS ;
+			if(lid == 0) {  // Go to next node 
+				uiLLNode = TRAVERSE(pNodePool, prevNodeIndex, nextNodeIndex) ;
+				//printf("uiLLNode%dprevNodeIndex%dnextNodeIndex%d", uiLLNode, prevNodeIndex, nextNodeIndex) ;
 			}
 			// wait for all work-items to reach this, point (especially WI0)
-            work_group_barrier(CLK_GLOBAL_MEM_FENCE|CLK_LOCAL_MEM_FENCE) ;
-			// Let other work-items in a work-group know status value !!!
-            status = work_group_broadcast(status, 0) ;
+			work_group_barrier(CLK_GLOBAL_MEM_FENCE|CLK_LOCAL_MEM_FENCE) ;
+			// Let other work-items in a work-group know next-node-index !!!
+			uiLLNode = work_group_broadcast(uiLLNode, 0) ;
 
-            if(status == HTS_REPLACE_SUCCESS) return true ; // SUCCESSFULLY INSERTED KEY 
-		}
+			if( uiLLNode != (int)NULL) { // if next-node exists ?? 
+				// clone the node by inserting key and return new node index
+				cloneNodeIndex = CLONE(pNodePool, uiHeadIndex, nextNodeIndex, uiKey) ;
+				if(cloneNodeIndex == NULL) return false ; // Boundary conditions
+				// Delete node which was there before inserting key and free it
+				if(lid == 0) {
+					status = REPLACE(pNodePool, uiHeadIndex, uiLLNode, cloneNodeIndex) ;
+				}
+				// wait for all work-items to reach this, point (especially WI0)
+				work_group_barrier(CLK_GLOBAL_MEM_FENCE|CLK_LOCAL_MEM_FENCE) ;
+				// Let other work-items in a work-group know status value !!!
+				status = work_group_broadcast(status, 0) ;
+				if(status == HTS_REPLACE_SUCCESS) return true ; // SUCCESSFULLY INSERTED KEY 
+				else { // If replace fails, we need to free cloned node
+					if(lid == 0) uiFree(pNodePool, uiHeadIndex, cloneNodeIndex) ;
+					work_group_barrier(CLK_GLOBAL_MEM_FENCE|CLK_LOCAL_MEM_FENCE) ;
+				}
+			}//end-of if(uiLLNode != (int)NULL)
+			else {
+				// clone the node by inserting key and return new node index
+				cloneNodeIndex = CLONE(pNodePool, uiHeadIndex, nextNodeIndex, uiKey) ;
+				if(cloneNodeIndex == NULL) return false ; // Boundary conditions
+				uiLLMNode = pNodePool[nextNodeIndex].uiNext ;
+				uiLLNode = GET_PTR(uiLLMNode) ;
+				pBits = GET_BITS(uiLLMNode) ;
+				if(lid == 0) {
+					pNodePool[cloneNodeIndex].uiNext = pNodePool[nextNodeIndex].uiNext ;
+					atomic_uint* pChgPtr =
+					(atomic_uint *)(&(pNodePool[nextNodeIndex].uiNext));
+					uiMNextNode = SET_PTR(cloneNodeIndex) | pBits ;
+					status2 = atomic_compare_exchange_strong(pChgPtr, &uiLLMNode, uiMNextNode) ;
+					if(status2 == false) status = HTS_REPLACE_FAILED ;
+					else status = HTS_REPLACE_SUCCESS ;
+				}
+				// wait for all work-items to reach this, point (especially WI0)
+				work_group_barrier(CLK_GLOBAL_MEM_FENCE|CLK_LOCAL_MEM_FENCE) ;
+				// Let other work-items in a work-group know status value !!!
+				status = work_group_broadcast(status, 0) ;
 
-    }// end-of if(status == HTS_WINDOW_FOUND)
-	return false ; /* FAILED IN INSERTING KEY */
-
+				if(status == HTS_REPLACE_SUCCESS) return true ; // SUCCESSFULLY INSERTED KEY
+				else { // If replace fails, we need to free cloned node
+					if(lid == 0) uiFree(pNodePool, uiHeadIndex, cloneNodeIndex) ;
+					work_group_barrier(CLK_GLOBAL_MEM_FENCE|CLK_LOCAL_MEM_FENCE) ;
+				} 
+			}
+		}// end-of if(status == HTS_WINDOW_FOUND)
+		else return false ; /* FAILED IN INSERTING KEY */
+	} // end-of-while(true);
 } // end of bAdd()
 
 
@@ -645,43 +635,47 @@ bool bRemove( TLLNode*  pNodePool,    /* Hash-table + stack of free nodes */
 	int cloneNodeIndex = 0 ;
 	uint lid = get_local_id(0) ;
 
-	// check whether key exists or not, if exists return key_found
-    status = bFind( pNodePool, uiKey, &prevNodeIndex, &nextNodeIndex, &Index ) ;
+	while(true) {
+		// check whether key exists or not, if exists return key_found
+		status = bFind( pNodePool, uiKey, &prevNodeIndex, &nextNodeIndex, &Index ) ;
 
-    if(status == HTS_KEY_FOUND) { /* if key_found */
+		if(status == HTS_KEY_FOUND) { /* if key_found */
 
-        if(lid == 0) {  /* Go to next node */
-            uiLLNode = TRAVERSE(pNodePool, prevNodeIndex, nextNodeIndex) ;
-			//printf("uiLLNode%dprevNodeIndex%dnextNodeIndex%d", uiLLNode, prevNodeIndex, nextNodeIndex) ;
-        }
-		// wait for all work-items to reach this, point (especially WI0)
-        work_group_barrier(CLK_GLOBAL_MEM_FENCE|CLK_LOCAL_MEM_FENCE) ;
-		// Let other work-items in a work-group know next-node-index !!!
-        uiLLNode = work_group_broadcast(uiLLNode, 0) ;
-
-        if( uiLLNode != (int)NULL) { /* if next-node exists ?? */
-
-			// clone the node by deleting key and return new node
-		    cloneNodeIndex = CLONE(pNodePool,uiHeadIndex,nextNodeIndex,uiKey) ;
-			if(cloneNodeIndex == NULL) return false ; // Boundary conditions
-			
-			// Delete node which was there before deleting key and free it
-            if(lid == 0) {
-                status = REPLACE(pNodePool,uiHeadIndex, uiLLNode, cloneNodeIndex) ;
-            }
-
+			if(lid == 0) {  /* Go to next node */
+				uiLLNode = TRAVERSE(pNodePool, prevNodeIndex, nextNodeIndex) ;
+				//printf("uiLLNode%dprevNodeIndex%dnextNodeIndex%d", uiLLNode, prevNodeIndex, nextNodeIndex) ;
+			}
 			// wait for all work-items to reach this, point (especially WI0)
-            work_group_barrier(CLK_GLOBAL_MEM_FENCE|CLK_LOCAL_MEM_FENCE) ;
-			// Let other work-items in a work-group know status value !!!
-            status = work_group_broadcast(status, 0) ;
+			work_group_barrier(CLK_GLOBAL_MEM_FENCE|CLK_LOCAL_MEM_FENCE) ;
+			// Let other work-items in a work-group know next-node-index !!!
+			uiLLNode = work_group_broadcast(uiLLNode, 0) ;
 
-            if(status == HTS_REPLACE_SUCCESS) return true ; /* SUCCESSFULLY DELETED KEY */
+			if( uiLLNode != (int)NULL) { /* if next-node exists ?? */
 
-        }//end-of if(uiLLNode != (int)NULL)
+				// clone the node by deleting key and return new node
+				cloneNodeIndex = CLONE(pNodePool,uiHeadIndex,nextNodeIndex,uiKey) ;
+				if(cloneNodeIndex == NULL) return false ; // Boundary conditions
+			
+				// Delete node which was there before deleting key and free it
+				if(lid == 0) {
+					status = REPLACE(pNodePool,uiHeadIndex, uiLLNode, cloneNodeIndex) ;
+				}
 
-    }// end-of if(status == HTS_WINDOW_FOUND)
+				// wait for all work-items to reach this, point (especially WI0)
+				work_group_barrier(CLK_GLOBAL_MEM_FENCE|CLK_LOCAL_MEM_FENCE) ;
+				// Let other work-items in a work-group know status value !!!
+				status = work_group_broadcast(status, 0) ;
 
-	return false ; /* FAILED IN DELETING KEY */
+				if(status == HTS_REPLACE_SUCCESS) return true ; /* SUCCESSFULLY DELETED KEY */
+				else { // If replace fails, we need to free cloned node
+					if(lid == 0) uiFree(pNodePool, uiHeadIndex, cloneNodeIndex) ;
+					work_group_barrier(CLK_GLOBAL_MEM_FENCE|CLK_LOCAL_MEM_FENCE) ;
+				}
+			}//end-of if(uiLLNode != (int)NULL)
+
+		}// end-of if(status == HTS_WINDOW_FOUND)
+		else return false ; /* FAILED IN DELETING KEY */
+	}
 } // end of bRemove()
 
 
@@ -726,7 +720,7 @@ __kernel void HTSTopKernel(__global void* pvOclReqQueue,
 							&nextNodeIndex, /* key location */
 							&uiIndex);
                 if(uiIndex) bReqStatus = true ;
-				if(lid == 0) printf("uiIndex%d-prevNodeIndex%d-nextNodeIndex%d",uiIndex,prevNodeIndex, nextNodeIndex) ;
+				//if(lid == 0) printf("uiIndex%d-prevNodeIndex%d-nextNodeIndex%d",uiIndex,prevNodeIndex, nextNodeIndex) ;
             }
         else if(uiType == HTS_REQ_TYPE_ADD)
             {
